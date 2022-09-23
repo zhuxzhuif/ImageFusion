@@ -23,6 +23,7 @@ set(DEP_SRC
         ${DEP_XML_INCLUDE_DIR}/pugixml.cpp)
 
 include_directories(
+        include
         ${DEP_INCLUDE_DIR})
 
 
