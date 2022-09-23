@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD 17)
 
 find_package(OpenCV REQUIRED)
 find_package(gflags REQUIRED)
+if(NOT ${gflags_FOUND})
+    message(FATAL_ERROR "Could not find gflags\nPlease use `sudo apt-get install libflags-dev` to install")
+endif()
 
 
 set(LIB
