@@ -11,6 +11,7 @@
 #include <chrono>
 #include <filesystem>
 #include <random>
+#include <vector>
 namespace fs = std::filesystem;
 
 #include <gflags/gflags.h>
@@ -65,7 +66,7 @@ int gen_random_number(int lower, int upper)
 void crop_image(const cv::Mat &src, cv::Mat &des)
 {
   cv::Mat target_image_gray;
-  cv::cvtColor(src, target_image_gray, cv::COLOR_BGR2GRAY);
+  cv::cvtColor(src, target_image_gray, cv::COLOR_BGRA2GRAY);
 
   cv::Mat target_image_gray_threshold;
   cv::threshold(target_image_gray, target_image_gray_threshold, 240, 255, cv::THRESH_BINARY_INV);
@@ -90,15 +91,45 @@ void crop_image(const cv::Mat &src, cv::Mat &des)
                             cv::Range(rect.x, rect.x+rect.width));
 }
 
+// Rotate the target image with a certain angle
+void rotate_image(const cv::Mat &src, cv::Mat &des, int angle)
+{
+  cv::Point2f center((src.cols-1)/2.0, (src.rows-1)/2.0);
+  cv::Mat rot = cv::getRotationMatrix2D(center, angle, 1.0);
+  cv::Rect2f bbox = cv::RotatedRect(cv::Point2f(), src.size(), angle).boundingRect2f();
+  rot.at<double>(0, 2) += bbox.width / 2.0 - src.cols / 2.0;
+  rot.at<double>(1, 2) += bbox.height / 2.0 - src.rows / 2.0;
+  cv::warpAffine(src, des, rot, bbox.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(255, 255, 255));
+  // TODO: transparent background
+
+  cv::imshow("target_rotated", des);
+  std::cout << des << std::endl;
+}
+
+// TODO: @Xiufeng ZHU
+// Scale the image with a percentage
+void scale_image(const cv::Mat &src, cv::Mat &dex, double scale);
+
+// TODO: @Xiufeng ZHU
+// Blur the image
+void blur_image(const cv::Mat &src, const cv::Mat &background, cv::Mat &des);
+
+
 // Helper function
 // Fuse a target image into a background image
 void Fuse(const std::string &target_dir,
      const std::string &background_dir,
      const std::string &filename,
-     const std::string &background_filename)
+     const std::string &background_filename,
+     xml_writer::XMLLabelFile &file)
 {
   // TODO: target image will be constructed and destructed at each loop
   auto target_image = cv::imread(target_dir + filename + ".png");
+  cv::cvtColor(target_image, target_image, cv::COLOR_BGR2BGRA);
+  std::vector<cv::Mat> channels(4);
+  cv::split(target_image, channels);
+  channels[3] = cv::Mat::ones(target_image.size(), CV_8UC1);
+  cv::merge(channels, target_image);
   std::cout << target_dir + filename + ".png" << std::endl;
   std::cout << "Target image " << filename << " size: " << target_image.size() << std::endl;
 
@@ -109,35 +140,42 @@ void Fuse(const std::string &target_dir,
   // ========== crop ==============
 
   auto background = cv::imread(background_dir + background_filename + ".jpg");
+  cv::cvtColor(background, background, cv::COLOR_BGR2BGRA);
   cv::resize(background, background, cv::Size(640, 480));
   cv::imshow("background", background);
   // messy loops
-  for (auto location_idx = 0; location_idx < LOCATION_NUM; location_idx++) {
-  for (auto random_idx = 0; random_idx < RANDOM_SPAWN_NUM; random_idx++) {
+  for (auto location_idx = 0; location_idx < LOCATION_NUM; location_idx++) {  // done
+  for (auto random_idx = 0; random_idx < RANDOM_SPAWN_NUM; random_idx++) {    // done
   for (auto rotation_idx = 0; rotation_idx < ROTATION_NUM; rotation_idx++) {
   for (auto scale_idx = 0; scale_idx < SCALE_NUM; scale_idx++) {
   for (auto blur_idx = 0; blur_idx < BLUR_NUM; blur_idx++) {
   for (auto light_idx = 0; light_idx < LIGHT_NUM; light_idx++) {
     // do the work
     std::cout << "Location idx: " << location_idx << std::endl;
-    auto target_size = target_cropped.size();
 
+    // ================ Rotate =============
     // Rotation ref: https://stackoverflow.com/questions/22041699/rotate-an-image-without-cropping-in-opencv-in-c
-    int angle = 360 / ROTATION_NUM * rotation_idx;
-    cv::Point2i center((target_cropped.cols-1)/2.0, (target_cropped.rows-1)/2.0);
+    double angle = -360 / ROTATION_NUM * rotation_idx;
+    std::cout << "Rotation angle: " << angle << std::endl;
+    cv::Mat target_rotated;
+    rotate_image(target_cropped, target_rotated, angle);
+    // ================ Rotate =============
 
 
     int x_left = LOCATIONS[location_idx][0];
     int y_up = LOCATIONS[location_idx][1];
-    int x_right = LOCATIONS[location_idx][2] - target_size.width;
-    int y_down = LOCATIONS[location_idx][3] - target_size.height;
+    int x_right = LOCATIONS[location_idx][2] - target_rotated.size().width;
+    int y_down = LOCATIONS[location_idx][3] - target_rotated.size().height;
     int x = gen_random_number(x_left, x_right);
     int y = gen_random_number(y_up, y_down);
     auto background_copy = background.clone();
-    cv::Mat roi(background_copy, cv::Rect(x, y, target_size.width, target_size.height));
-    target_cropped.copyTo(roi);
+    cv::Mat roi(background_copy, cv::Rect(x, y, target_rotated.size().width, target_rotated.size().height));
+    target_rotated.copyTo(roi);
     cv::imshow("copied background", background_copy);
-    cv::waitKey(10);
+    cv::waitKey(1);
+
+    // save the xml file
+    // file.SaveFile();
 
   }}}}}}
 
@@ -155,8 +193,6 @@ int main(int argc, char **argv)
   if (background_dir.back() != '/') background_dir.push_back('/');
   if (output_dir.back() != '/') output_dir.push_back('/');
 
-
-
   xml_writer::XMLLabelFile file;
 
   auto start_time = std::chrono::high_resolution_clock::now();
@@ -168,7 +204,7 @@ int main(int argc, char **argv)
     for (const auto &background_entry : fs::directory_iterator(background_dir)) {
       // TODO: Do the OpenCV transform work here
       auto background_filename = background_entry.path().filename().replace_extension("").string();
-      Fuse(target_dir, background_dir, filename, background_filename);
+      Fuse(target_dir, background_dir, filename, background_filename, file);
     }
 
     auto image_end_time = std::chrono::high_resolution_clock::now();
